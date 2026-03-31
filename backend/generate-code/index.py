@@ -1,4 +1,4 @@
-"""Генерация кода через Google Gemini по описанию пользователя"""
+"""Генерация кода через Hugging Face Inference API по описанию пользователя"""
 import json
 import os
 import urllib.request
@@ -19,7 +19,7 @@ SYSTEM_PROMPT = """Ты — экспертный генератор кода. П
 
 
 def handler(event, context):
-    """Генерация кода для веб-фреймворков через Google Gemini"""
+    """Генерация кода для веб-фреймворков через Hugging Face"""
     if event.get('httpMethod') == 'OPTIONS':
         return {
             'statusCode': 200,
@@ -45,9 +45,9 @@ def handler(event, context):
     if not prompt:
         return {'statusCode': 400, 'headers': cors, 'body': json.dumps({'error': 'Prompt is required'})}
 
-    api_key = os.environ.get('GEMINI_API_KEY', '')
+    api_key = os.environ.get('HF_API_KEY', '')
     if not api_key:
-        return {'statusCode': 500, 'headers': cors, 'body': json.dumps({'error': 'Gemini API key not configured'})}
+        return {'statusCode': 500, 'headers': cors, 'body': json.dumps({'error': 'HF API key not configured'})}
 
     framework_map = {
         'react': 'React с TypeScript и Tailwind CSS',
@@ -62,36 +62,33 @@ def handler(event, context):
     user_message = f"Фреймворк: {framework_name}\nТип: {code_type}\nЗадача: {prompt}"
 
     payload = json.dumps({
-        'contents': [
-            {
-                'parts': [
-                    {'text': SYSTEM_PROMPT + '\n\n' + user_message}
-                ]
-            }
+        'model': 'Qwen/Qwen2.5-Coder-32B-Instruct',
+        'messages': [
+            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': user_message}
         ],
-        'generationConfig': {
-            'temperature': 0.3,
-            'maxOutputTokens': 4000
-        }
+        'temperature': 0.3,
+        'max_tokens': 4000
     }).encode('utf-8')
 
-    url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}'
-
     req = urllib.request.Request(
-        url,
+        'https://router.huggingface.co/v1/chat/completions',
         data=payload,
-        headers={'Content-Type': 'application/json'}
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}'
+        }
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8') if e.fp else ''
         return {
             'statusCode': 502,
             'headers': cors,
-            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body})
+            'body': json.dumps({'error': f'HF API error: {e.code}', 'details': error_body})
         }
     except Exception as e:
         return {
@@ -100,12 +97,7 @@ def handler(event, context):
             'body': json.dumps({'error': f'Request failed: {str(e)}'})
         }
 
-    candidates = result.get('candidates', [])
-    if not candidates:
-        return {'statusCode': 502, 'headers': cors, 'body': json.dumps({'error': 'No response from Gemini'})}
-
-    parts = candidates[0].get('content', {}).get('parts', [])
-    code = parts[0].get('text', '') if parts else ''
+    code = result.get('choices', [{}])[0].get('message', {}).get('content', '')
 
     if code.startswith('```'):
         lines = code.split('\n')
@@ -114,8 +106,7 @@ def handler(event, context):
             lines = lines[:-1]
         code = '\n'.join(lines)
 
-    usage = result.get('usageMetadata', {})
-    total_tokens = usage.get('totalTokenCount', 0)
+    usage = result.get('usage', {})
 
     return {
         'statusCode': 200,
@@ -123,6 +114,6 @@ def handler(event, context):
         'body': json.dumps({
             'code': code,
             'framework': framework,
-            'tokens': total_tokens
+            'tokens': usage.get('total_tokens', 0)
         })
     }
