@@ -3,6 +3,9 @@ import Icon from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import funcUrls from "../../backend/func2url.json";
+
+const GENERATE_URL = funcUrls["generate-code"];
 
 const frameworks = [
   { id: "react", name: "React", icon: "Atom", color: "text-cyan-400 border-cyan-400/30 bg-cyan-400/10" },
@@ -22,58 +25,14 @@ const examplePrompts = [
   "Создай форму авторизации с валидацией полей",
 ];
 
-const mockGeneratedCode = `import { useState } from 'react';
-
-interface ProductCardProps {
-  image: string;
-  title: string;
-  price: number;
-  currency?: string;
-}
-
-export function ProductCard({ 
-  image, 
-  title, 
-  price, 
-  currency = '₽' 
-}: ProductCardProps) {
-  const [added, setAdded] = useState(false);
-
-  const handleAddToCart = () => {
-    setAdded(true);
-    setTimeout(() => setAdded(false), 2000);
-  };
-
-  return (
-    <div className="rounded-2xl overflow-hidden border border-border bg-card hover:shadow-xl transition-all duration-300 group">
-      <div className="aspect-square overflow-hidden">
-        <img 
-          src={image} 
-          alt={title}
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-        />
-      </div>
-      <div className="p-4">
-        <h3 className="font-semibold text-lg mb-2">{title}</h3>
-        <div className="flex items-center justify-between">
-          <span className="text-2xl font-bold text-primary">
-            {price.toLocaleString()} {currency}
-          </span>
-          <button
-            onClick={handleAddToCart}
-            className={\`px-4 py-2 rounded-xl font-medium transition-all \${
-              added 
-                ? 'bg-green-500 text-white' 
-                : 'bg-primary text-primary-foreground hover:bg-primary/90'
-            }\`}
-          >
-            {added ? '✓ Добавлено' : 'В корзину'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}`;
+const fileExtensions: Record<string, string> = {
+  react: "Component.tsx",
+  vue: "Component.vue",
+  angular: "component.ts",
+  svelte: "Component.svelte",
+  nextjs: "page.tsx",
+  vanilla: "script.js",
+};
 
 export default function Generator() {
   const [prompt, setPrompt] = useState("");
@@ -82,22 +41,52 @@ export default function Generator() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
+  const [tokens, setTokens] = useState(0);
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!prompt.trim()) return;
     setIsGenerating(true);
     setGeneratedCode("");
+    setError("");
+    setTokens(0);
 
-    let i = 0;
-    const interval = setInterval(() => {
-      setGeneratedCode(mockGeneratedCode.slice(0, i));
-      i += 8;
-      if (i > mockGeneratedCode.length) {
-        clearInterval(interval);
+    try {
+      const resp = await fetch(GENERATE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: prompt.trim(),
+          framework: selectedFramework,
+          codeType: selectedType,
+        }),
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        setError(data.error || "Ошибка генерации");
         setIsGenerating(false);
-        setGeneratedCode(mockGeneratedCode);
+        return;
       }
-    }, 20);
+
+      const fullCode = data.code || "";
+      setTokens(data.tokens || 0);
+
+      let i = 0;
+      const interval = setInterval(() => {
+        setGeneratedCode(fullCode.slice(0, i));
+        i += 12;
+        if (i > fullCode.length) {
+          clearInterval(interval);
+          setIsGenerating(false);
+          setGeneratedCode(fullCode);
+        }
+      }, 10);
+    } catch {
+      setError("Не удалось подключиться к серверу");
+      setIsGenerating(false);
+    }
   };
 
   const handleCopy = () => {
@@ -198,6 +187,13 @@ export default function Generator() {
               </span>
             )}
           </Button>
+
+          {error && (
+            <div className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 flex items-center gap-2 text-sm text-red-400">
+              <Icon name="AlertCircle" size={16} />
+              {error}
+            </div>
+          )}
         </div>
 
         <div className="glass rounded-2xl overflow-hidden flex flex-col min-h-[500px]">
@@ -209,9 +205,9 @@ export default function Generator() {
                 <div className="w-3 h-3 rounded-full bg-green-400/70" />
               </div>
               <span className="text-xs font-mono text-muted-foreground">
-                {selectedFramework === "react" ? "ProductCard.tsx" : "component.js"}
+                {fileExtensions[selectedFramework] || "code.tsx"}
               </span>
-              {generatedCode && (
+              {generatedCode && !isGenerating && (
                 <Badge variant="outline" className="text-xs text-green-400 border-green-400/30">
                   Готово
                 </Badge>
@@ -248,17 +244,21 @@ export default function Generator() {
             )}
           </div>
 
-          {generatedCode && (
+          {generatedCode && !isGenerating && (
             <div className="px-4 py-3 border-t border-border bg-secondary/20 flex items-center justify-between">
-              <span className="text-xs text-muted-foreground font-mono">{generatedCode.split('\n').length} строк</span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground font-mono">{generatedCode.split('\n').length} строк</span>
+                {tokens > 0 && (
+                  <span className="text-xs text-muted-foreground/60 font-mono">{tokens} токенов</span>
+                )}
+              </div>
               <div className="flex gap-2">
-                <button className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                <button
+                  onClick={handleGenerate}
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                >
                   <Icon name="RefreshCw" size={12} />
                   Перегенерировать
-                </button>
-                <button className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 transition-colors">
-                  <Icon name="BookmarkPlus" size={12} />
-                  Сохранить
                 </button>
               </div>
             </div>
