@@ -1,4 +1,4 @@
-"""Генерация кода через OpenAI по описанию пользователя"""
+"""Генерация кода через Google Gemini по описанию пользователя"""
 import json
 import os
 import urllib.request
@@ -19,7 +19,7 @@ SYSTEM_PROMPT = """Ты — экспертный генератор кода. П
 
 
 def handler(event, context):
-    """Генерация кода для веб-фреймворков через OpenAI GPT"""
+    """Генерация кода для веб-фреймворков через Google Gemini"""
     if event.get('httpMethod') == 'OPTIONS':
         return {
             'statusCode': 200,
@@ -45,9 +45,9 @@ def handler(event, context):
     if not prompt:
         return {'statusCode': 400, 'headers': cors, 'body': json.dumps({'error': 'Prompt is required'})}
 
-    api_key = os.environ.get('OPENAI_API_KEY', '')
+    api_key = os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
-        return {'statusCode': 500, 'headers': cors, 'body': json.dumps({'error': 'OpenAI API key not configured'})}
+        return {'statusCode': 500, 'headers': cors, 'body': json.dumps({'error': 'Gemini API key not configured'})}
 
     framework_map = {
         'react': 'React с TypeScript и Tailwind CSS',
@@ -62,22 +62,25 @@ def handler(event, context):
     user_message = f"Фреймворк: {framework_name}\nТип: {code_type}\nЗадача: {prompt}"
 
     payload = json.dumps({
-        'model': 'gpt-4o-mini',
-        'messages': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': user_message}
+        'contents': [
+            {
+                'parts': [
+                    {'text': SYSTEM_PROMPT + '\n\n' + user_message}
+                ]
+            }
         ],
-        'temperature': 0.3,
-        'max_tokens': 4000
+        'generationConfig': {
+            'temperature': 0.3,
+            'maxOutputTokens': 4000
+        }
     }).encode('utf-8')
 
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}'
+
     req = urllib.request.Request(
-        'https://api.openai.com/v1/chat/completions',
+        url,
         data=payload,
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_key}'
-        }
+        headers={'Content-Type': 'application/json'}
     )
 
     try:
@@ -88,7 +91,7 @@ def handler(event, context):
         return {
             'statusCode': 502,
             'headers': cors,
-            'body': json.dumps({'error': f'OpenAI API error: {e.code}', 'details': error_body})
+            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body})
         }
     except Exception as e:
         return {
@@ -97,7 +100,12 @@ def handler(event, context):
             'body': json.dumps({'error': f'Request failed: {str(e)}'})
         }
 
-    code = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+    candidates = result.get('candidates', [])
+    if not candidates:
+        return {'statusCode': 502, 'headers': cors, 'body': json.dumps({'error': 'No response from Gemini'})}
+
+    parts = candidates[0].get('content', {}).get('parts', [])
+    code = parts[0].get('text', '') if parts else ''
 
     if code.startswith('```'):
         lines = code.split('\n')
@@ -106,7 +114,8 @@ def handler(event, context):
             lines = lines[:-1]
         code = '\n'.join(lines)
 
-    usage = result.get('usage', {})
+    usage = result.get('usageMetadata', {})
+    total_tokens = usage.get('totalTokenCount', 0)
 
     return {
         'statusCode': 200,
@@ -114,6 +123,6 @@ def handler(event, context):
         'body': json.dumps({
             'code': code,
             'framework': framework,
-            'tokens': usage.get('total_tokens', 0)
+            'tokens': total_tokens
         })
     }
